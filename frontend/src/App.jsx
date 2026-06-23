@@ -23,7 +23,7 @@ function Esp32Board({ label, role, accent }) {
       </div>
       <div className="text-center">
         <p className="text-xs md:text-sm font-bold text-slate-800 dark:text-slate-200">{label}</p>
-        <p className="text-[9px] md:text-[10px] uppercase tracking-widest text-slate-450 dark:text-slate-500 font-semibold">{role}</p>
+        <p className="text-[9px] md:text-[10px] uppercase tracking-widest text-slate-455 dark:text-slate-500 font-semibold">{role}</p>
       </div>
     </div>
   );
@@ -42,13 +42,29 @@ function Metric({ label, value, unit, valueClass = "text-slate-800 dark:text-sla
 }
 
 function App() {
-  // Routing & Authentication State
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [view, setView] = useState("login");
-  const [registeredUsers, setRegisteredUsers] = useState([]);
+  // Routing & Authentication State (persisted in localStorage)
+  const [isLoggedIn, setIsLoggedIn] = useState(() => {
+    return localStorage.getItem("isLoggedIn") === "true";
+  });
+  
+  const [view, setView] = useState(() => {
+    return localStorage.getItem("isLoggedIn") === "true" ? "home" : "login";
+  });
 
-  // Theme & Play/Pause State
-  const [isDarkMode, setIsDarkMode] = useState(true);
+  const [registeredUsers, setRegisteredUsers] = useState(() => {
+    try {
+      const saved = localStorage.getItem("registeredUsers");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  // Theme (default to false / light mode) & Play/Pause State
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    const saved = localStorage.getItem("isDarkMode");
+    return saved !== null ? JSON.parse(saved) : false; // default to false (light mode)
+  });
   const [isPaused, setIsPaused] = useState(false);
 
   // Apply dark mode class on document element
@@ -167,7 +183,7 @@ function App() {
   let qualityColor = "text-emerald-500 dark:text-emerald-400";
   if (rssi < -80) {
     quality = "Weak";
-    qualityColor = "text-rose-500 dark:text-rose-450";
+    qualityColor = "text-rose-500 dark:text-rose-455";
   } else if (rssi < -67) {
     quality = "Fair";
     qualityColor = "text-amber-500 dark:text-amber-400";
@@ -176,21 +192,42 @@ function App() {
     qualityColor = "text-sky-500 dark:text-sky-400";
   }
 
-  const pulseColor = objectPresent ? "bg-amber-450" : "bg-sky-450";
+  const pulseColor = objectPresent ? "bg-amber-450" : "bg-sky-455";
   const pulseGlow = objectPresent
     ? "0 0 10px 3px rgba(251,191,36,0.8)"
     : "0 0 10px 3px rgba(56,189,248,0.8)";
 
+  // Login handler
+  const handleLogin = () => {
+    setIsLoggedIn(true);
+    localStorage.setItem("isLoggedIn", "true");
+    setView("home");
+  };
+
   // Registration handler
   const handleRegisterSuccess = (newUser) => {
-    setRegisteredUsers((prev) => [...prev, newUser]);
+    setRegisteredUsers((prev) => {
+      const next = [...prev, newUser];
+      localStorage.setItem("registeredUsers", JSON.stringify(next));
+      return next;
+    });
     setView("login");
   };
 
   // Sign out handler
   const handleSignOut = () => {
     setIsLoggedIn(false);
+    localStorage.removeItem("isLoggedIn");
     setView("login");
+  };
+
+  // Theme toggler that persists selection
+  const toggleDarkMode = () => {
+    setIsDarkMode((prev) => {
+      const next = !prev;
+      localStorage.setItem("isDarkMode", JSON.stringify(next));
+      return next;
+    });
   };
 
   // Render Login and Registration Screens when not Authenticated
@@ -201,20 +238,17 @@ function App() {
           onRegisterSuccess={handleRegisterSuccess}
           onNavigateToLogin={() => setView("login")}
           isDarkMode={isDarkMode}
-          toggleDarkMode={() => setIsDarkMode(!isDarkMode)}
+          toggleDarkMode={toggleDarkMode}
         />
       );
     }
     return (
       <Login
-        onLogin={() => {
-          setIsLoggedIn(true);
-          setView("home");
-        }}
+        onLogin={handleLogin}
         onNavigateToRegister={() => setView("register")}
         registeredUsers={registeredUsers}
         isDarkMode={isDarkMode}
-        toggleDarkMode={() => setIsDarkMode(!isDarkMode)}
+        toggleDarkMode={toggleDarkMode}
       />
     );
   }
@@ -255,7 +289,7 @@ function App() {
         onViewChange={setView}
         onSignOut={handleSignOut}
         isDarkMode={isDarkMode}
-        toggleDarkMode={() => setIsDarkMode(!isDarkMode)}
+        toggleDarkMode={toggleDarkMode}
         isPaused={isPaused}
         togglePlayPause={() => setIsPaused(!isPaused)}
       />
@@ -265,7 +299,7 @@ function App() {
         {view === "home" ? (
           <div className="flex-1 flex flex-col animate-fadeIn">
             {/* telemetry visualizer path */}
-            <main className="flex-1 min-h-[280px] md:min-h-[360px] relative flex items-center justify-between px-4 md:px-[6vw] py-8 bg-slate-100/50 dark:bg-slate-950 border-b border-slate-200 dark:border-transparent transition-colors">
+            <main className="flex-1 min-h-[280px] md:min-h-[360px] relative flex items-center justify-between px-4 md:px-[6vw] py-8 bg-slate-100/50 dark:bg-slate-955 border-b border-slate-200 dark:border-transparent transition-colors">
               {/* transmitter with animated rings */}
               <div className="relative z-10">
                 <div className="absolute left-1/2 top-2 md:top-3 -translate-x-1/2 pointer-events-none">
@@ -304,7 +338,7 @@ function App() {
                 {/* distance badge */}
                 <div className="absolute left-1/2 -translate-x-1/2 -top-12">
                   <div className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-850 shadow-lg transition-colors">
-                    <span className="text-xs md:text-sm font-mono font-bold text-sky-600 dark:text-sky-450">
+                    <span className="text-xs md:text-sm font-mono font-bold text-sky-605 dark:text-sky-450">
                       {distance.toFixed(1)} m
                     </span>
                   </div>
@@ -328,7 +362,7 @@ function App() {
             </main>
 
             {/* telemetry stats & controller */}
-            <footer className="shrink-0 bg-slate-100/70 dark:bg-slate-900/40 border-t border-slate-200 dark:border-slate-900 pb-8 transition-colors">
+            <footer className="shrink-0 bg-slate-105/70 dark:bg-slate-900/40 border-t border-slate-200 dark:border-slate-900 pb-8 transition-colors">
               {/* responsive metric grid */}
               <div className="px-4 md:px-8 py-5 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 max-w-7xl mx-auto w-full">
                 <Metric label="Distance" value={distance.toFixed(1)} unit="m" />

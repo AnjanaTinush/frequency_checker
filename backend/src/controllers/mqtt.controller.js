@@ -1,4 +1,51 @@
+const Pusher = require("pusher");
 const mqttService = require("../services/mqtt.service");
+
+// Initialize Pusher directly with your credentials
+const pusher = new Pusher({
+  appId: "2169886",
+  key: "37eddc60d27348eb95f7",
+  secret: "67d7f2722358742b4128",
+  cluster: "ap1",
+  useTLS: true,
+});
+
+/**
+ * Handles incoming JSON CSI packets from the Python application
+ * Every 1 second, it broadcasts the payload instantly to the React frontend
+ */
+const streamCsiData = async (req, res) => {
+  try {
+    const csiPayload = req.body;
+
+    // Validate that the request contains valid JSON data
+    if (!csiPayload || Object.keys(csiPayload).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid payload: JSON data is required.",
+      });
+    }
+
+    // Instantly trigger Pusher to broadcast the payload to the React frontend map
+    await pusher.trigger("wifi-sensing-channel", "csi-update", {
+      timestamp: new Date().toISOString(),
+      payload: csiPayload,
+    });
+
+    // Respond back to the Python app so it can clear its buffer/queue
+    return res.status(200).json({
+      success: true,
+      message: "CSI Packet broadcasted to React frontend successfully.",
+    });
+  } catch (error) {
+    console.error("Pusher Broadcast Error:", error.message);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to broadcast real-time data via Pusher.",
+      error: error.message,
+    });
+  }
+};
 
 const getHealth = (req, res) => {
   res.status(200).json({
@@ -94,6 +141,7 @@ const mqttSelfTest = async (req, res) => {
 };
 
 module.exports = {
+  streamCsiData, // Added function export
   getHealth,
   getMqttStatus,
   publishMessage,

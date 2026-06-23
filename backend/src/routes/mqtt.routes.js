@@ -6,6 +6,7 @@ const {
   subscribeTopic,
   getMessages,
   mqttSelfTest,
+  getStreamStatus
 } = require("../controllers/mqtt.controller");
 const { streamCsiData } = require("../controllers/mqtt.controller"); // Adjust path if needed
 

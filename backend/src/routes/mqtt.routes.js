@@ -25,4 +25,6 @@ router.post("/mqtt/self-test", mqttSelfTest);
 
 router.post("/csi-stream", streamCsiData);
 
+router.get("/csi-stream", getStreamStatus);
+
 module.exports = router;

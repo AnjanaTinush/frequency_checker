@@ -140,6 +140,14 @@ const mqttSelfTest = async (req, res) => {
   }
 };
 
+const getStreamStatus = (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "CSI Stream gateway is online and ready for Python POST payloads.",
+    endpoint: "/api/csi-stream"
+  });
+};
+
 module.exports = {
   streamCsiData, // Added function export
   getHealth,
@@ -148,4 +156,5 @@ module.exports = {
   subscribeTopic,
   getMessages,
   mqttSelfTest,
+  getStreamStatus
 };

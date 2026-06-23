@@ -85,7 +85,7 @@ export default function Navbar({
                 : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 border border-transparent"
             }`}
           >
-            RSI
+            RSSI
           </button>
           <button
             onClick={() => onViewChange("subcarrier")}

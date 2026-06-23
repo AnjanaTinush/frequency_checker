@@ -56,25 +56,36 @@ export default function Rsi({
       setLatestPusherData(data);
 
       const packet = data?.payload || data?.data || data || {};
-      const incomingRssi = packet?.rssi;
+      const samples = Array.isArray(packet?.samples)
+        ? packet.samples
+        : [packet];
 
-      const timeObj = data?.timestamp ? new Date(data.timestamp) : new Date();
-      const timeString = timeObj.toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      });
+      const nextItems = samples
+        .filter((sample) => sample?.rssi !== undefined && sample?.rssi !== null)
+        .map((sample) => {
+          const timeObj = sample?.timestamp
+            ? new Date(sample.timestamp)
+            : packet?.timestamp
+              ? new Date(packet.timestamp)
+              : data?.timestamp
+                ? new Date(data.timestamp)
+                : new Date();
 
-      if (incomingRssi !== undefined && incomingRssi !== null) {
+          const timeString = timeObj.toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+          });
+
+          return {
+            rssi: Number(sample.rssi),
+            time: timeString,
+          };
+        });
+
+      if (nextItems.length > 0) {
         setLiveHistory((prev) => {
-          const next = [
-            ...prev,
-            {
-              rssi: Number(incomingRssi),
-              time: timeString,
-            },
-          ];
-
+          const next = [...prev, ...nextItems];
           return next.length > 40 ? next.slice(next.length - 40) : next;
         });
       }
@@ -87,7 +98,27 @@ export default function Rsi({
     };
   }, []);
 
-  const displayData = isLiveMode && liveHistory.length > 0 ? liveHistory : history;
+  const defaultData = useMemo(() => {
+    const timeString = new Date().toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+
+    return [
+      {
+        rssi: 0,
+        time: timeString,
+      },
+    ];
+  }, []);
+
+  const displayData =
+    isLiveMode && liveHistory.length > 0
+      ? liveHistory
+      : history && history.length > 0
+        ? history
+        : defaultData;
 
   const graphData = useMemo(() => {
     const width = 800;
@@ -100,11 +131,39 @@ export default function Rsi({
     const plotWidth = width - paddingLeft - paddingRight;
     const plotHeight = height - paddingTop - paddingBottom;
 
-    const yMin = -75;
-    const yMax = 0;
-    const yRange = yMax - yMin;
+    const values = displayData
+      .map((item) => Number(item.rssi ?? 0))
+      .filter((value) => Number.isFinite(value));
 
-    const gridYValues = [-70, -60, -50, -40, -30, -20, -10, 0];
+    const minValue = Math.min(0, ...values);
+    const maxValue = Math.max(0, ...values);
+
+    const rawRange = Math.max(10, maxValue - minValue);
+    const padding = rawRange * 0.15;
+
+    const niceStep = (range) => {
+      if (range <= 10) return 2;
+      if (range <= 25) return 5;
+      if (range <= 50) return 10;
+      if (range <= 100) return 20;
+      if (range <= 250) return 50;
+      return 100;
+    };
+
+    const step = niceStep(rawRange);
+    const yMin = Math.floor((minValue - padding) / step) * step;
+    const yMax = Math.ceil((maxValue + padding) / step) * step;
+    const yRange = yMax - yMin || 1;
+
+    const gridYValues = [];
+    for (let value = yMin; value <= yMax; value += step) {
+      gridYValues.push(value);
+    }
+
+    if (!gridYValues.includes(0)) {
+      gridYValues.push(0);
+      gridYValues.sort((a, b) => a - b);
+    }
 
     const gridLinesY = gridYValues.map((value) => {
       const ratio = (value - yMin) / yRange;
@@ -116,20 +175,10 @@ export default function Rsi({
       };
     });
 
-    if (!displayData || displayData.length === 0) {
-      return {
-        linePath: "",
-        points: [],
-        gridLinesY,
-        gridLinesX: [],
-        plotWidth,
-        plotHeight,
-      };
-    }
-
     const points = displayData.map((item, index) => {
-      const x = paddingLeft + (index / (displayData.length - 1 || 1)) * plotWidth;
-      const rssi = Number(item.rssi ?? yMin);
+      const x =
+        paddingLeft + (index / (displayData.length - 1 || 1)) * plotWidth;
+      const rssi = Number(item.rssi ?? 0);
       const ratio = (rssi - yMin) / yRange;
       const y = paddingTop + plotHeight - ratio * plotHeight;
 

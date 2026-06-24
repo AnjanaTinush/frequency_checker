@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
+import Pusher from "pusher-js";
 
 /* --- ESP32 board glyph --- */
 function Esp32Board({ label, role, accent }) {
@@ -79,15 +80,104 @@ export default function Home({
   quality,
   qualityColor,
 }) {
-  const pulseColor = objectPresent ? "bg-amber-400" : "bg-sky-400";
-  const pulseGlow = objectPresent
+  // --- LIVE PUSHER TELEMETRY (same channel/event contract as Detection/Rsi/Subcarrier) ---
+  const [liveRssi, setLiveRssi] = useState(null);
+  const [liveMotionState, setLiveMotionState] = useState(null);
+  const [liveConnectionStatus, setLiveConnectionStatus] = useState("connecting...");
+  const [isLiveMode, setIsLiveMode] = useState(true);
+
+  const isPausedRef = useRef(isPaused);
+  const isLiveModeRef = useRef(isLiveMode);
+  useEffect(() => { isPausedRef.current = isPaused; }, [isPaused]);
+  useEffect(() => { isLiveModeRef.current = isLiveMode; }, [isLiveMode]);
+
+  useEffect(() => {
+    const pusher = new Pusher("37eddc60d27348eb95f7", {
+      cluster: "ap1",
+      forceTLS: true,
+    });
+
+    pusher.connection.bind("state_change", (states) => {
+      setLiveConnectionStatus(states.current);
+    });
+
+    pusher.connection.bind("error", () => {
+      setLiveConnectionStatus("error");
+    });
+
+    const parseMaybeJson = (value) => {
+      if (typeof value !== "string") return value;
+      try {
+        return JSON.parse(value);
+      } catch {
+        return value;
+      }
+    };
+
+    const channel = pusher.subscribe("csi-telemetry");
+
+    channel.bind("live-batch", (data) => {
+      if (isPausedRef.current || !isLiveModeRef.current) return;
+
+      const parsedData = parseMaybeJson(data);
+      const payload = parseMaybeJson(parsedData?.payload || parsedData?.data || parsedData);
+      if (!payload) return;
+
+      const samples =
+        payload.samples ||
+        payload.frames ||
+        payload.readings ||
+        (Array.isArray(payload) ? payload : [payload]);
+
+      if (!samples || samples.length === 0) return;
+
+      const newestSample = parseMaybeJson(samples[samples.length - 1]);
+      if (!newestSample || typeof newestSample !== "object") return;
+
+      const sampleRssi = newestSample.rssi;
+      if (sampleRssi !== undefined && sampleRssi !== null) {
+        setLiveRssi(Number(sampleRssi));
+      }
+
+      const motion = newestSample.motion || {};
+      const motionState =
+        motion.motion_state || motion.state || newestSample.motion_state || newestSample.state;
+      if (motionState) {
+        setLiveMotionState(String(motionState));
+      }
+    });
+
+    return () => {
+      channel.unbind_all();
+      pusher.unsubscribe("csi-telemetry");
+      pusher.disconnect();
+    };
+    // Connect once; pause/live-mode are read live via refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // --- SOURCE RESOLUTION (live Pusher data takes over from manual props when available) ---
+  const activeRssi = isLiveMode && liveRssi !== null ? liveRssi : rssi;
+
+  const liveObjectPresent = useMemo(() => {
+    if (!isLiveMode || !liveMotionState) return null;
+    const normalized = liveMotionState.toUpperCase();
+    if (normalized.includes("STATIC") || normalized.includes("OBSTACLE")) return true;
+    if (normalized.includes("IDLE")) return false;
+    return null;
+  }, [isLiveMode, liveMotionState]);
+
+  const activeObjectPresent = liveObjectPresent !== null ? liveObjectPresent : objectPresent;
+
+  const pulseColor = activeObjectPresent ? "bg-amber-400" : "bg-sky-400";
+  const pulseGlow = activeObjectPresent
     ? "0 0 10px 3px rgba(251,191,36,0.8)"
     : "0 0 10px 3px rgba(56,189,248,0.8)";
 
   const linkTone = useMemo(() => {
     if (isPaused) return "slate";
-    return objectPresent ? "amber" : "emerald";
-  }, [isPaused, objectPresent]);
+    return activeObjectPresent ? "amber" : "emerald";
+  }, [isPaused, activeObjectPresent]);
 
   return (
     <div className="flex-1 flex flex-col animate-fadeIn">
@@ -100,7 +190,7 @@ export default function Home({
                 Live Link Monitor
               </p>
               <h2 className="mt-1 text-2xl md:text-3xl font-black tracking-tight text-slate-950 dark:text-white">
-                Wi-Fi Sensing Overview
+                Signal Quality Measurement System
               </h2>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500 dark:text-slate-400">
                 Real-time visualization of the transmitter–receiver link, signal quality and the effect of
@@ -109,11 +199,36 @@ export default function Home({
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => setIsLiveMode(true)}
+                className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold ring-1 ring-inset transition-all ${
+                  isLiveMode
+                    ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-300 ring-emerald-500/20"
+                    : "bg-slate-500/10 text-slate-500 dark:text-slate-400 ring-slate-500/20"
+                }`}
+              >
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${
+                    liveConnectionStatus === "connected" ? "bg-emerald-500 animate-pulse" : "bg-amber-400"
+                  }`}
+                />
+                Live ESP32 ({liveConnectionStatus})
+              </button>
+              <button
+                onClick={() => setIsLiveMode(false)}
+                className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold ring-1 ring-inset transition-all ${
+                  !isLiveMode
+                    ? "bg-sky-500/10 text-sky-600 dark:text-sky-300 ring-sky-500/20"
+                    : "bg-slate-500/10 text-slate-500 dark:text-slate-400 ring-slate-500/20"
+                }`}
+              >
+                Manual
+              </button>
               <StatusChip tone={isPaused ? "slate" : "emerald"} dot>
                 {isPaused ? "Stream Paused" : "Streaming Live"}
               </StatusChip>
-              <StatusChip tone={objectPresent ? "amber" : "sky"} dot={objectPresent}>
-                {objectPresent ? "Path Obstructed" : "Clear Line-of-Sight"}
+              <StatusChip tone={activeObjectPresent ? "amber" : "sky"} dot={activeObjectPresent}>
+                {activeObjectPresent ? "Path Obstructed" : "Clear Line-of-Sight"}
               </StatusChip>
             </div>
           </div>
@@ -130,7 +245,7 @@ export default function Home({
                     <span
                       key={i}
                       className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-full border-2 ${
-                        objectPresent ? "border-amber-500/70" : "border-sky-500/70"
+                        activeObjectPresent ? "border-amber-500/70" : "border-sky-500/70"
                       }`}
                       style={{
                         width: "90px",
@@ -152,7 +267,7 @@ export default function Home({
                     style={{
                       animation: "travel 2.2s linear infinite",
                       boxShadow: pulseGlow,
-                      opacity: objectPresent ? 0.5 : 1,
+                      opacity: activeObjectPresent ? 0.5 : 1,
                     }}
                   />
                 )}
@@ -168,7 +283,7 @@ export default function Home({
               </div>
 
               {/* obstacle in the path */}
-              {objectPresent && (
+              {activeObjectPresent && (
                 <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
                   <div className="w-14 h-14 md:w-16 md:h-16 rounded-xl bg-amber-500/10 dark:bg-amber-500/15 border border-amber-500/30 dark:border-amber-500/35 flex items-center justify-center shadow-lg shadow-amber-500/5">
                     <span className="text-[9px] md:text-[10px] font-bold text-amber-500 dark:text-amber-400 tracking-wider">
@@ -189,34 +304,26 @@ export default function Home({
           </main>
         </div>
 
-        {/* --- Metrics --- */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 w-full">
-          <Metric label="Distance" value={distance.toFixed(1)} unit="m" />
+        {/* --- Live metrics strip --- */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 md:gap-4">
+          <Metric label="RSSI" value={activeRssi} unit="dBm" />
+          <Metric label="Frequency" value={freq} unit="MHz" />
           <Metric
-            label="Frequency"
-            value={freq.toFixed(4)}
-            unit="GHz"
-            valueClass={`font-mono ${
-              freqDropped ? "text-amber-500 dark:text-amber-400" : "text-sky-500 dark:text-sky-400"
-            }`}
-          />
-          <Metric
-            label="Frequency drop"
-            value={`-${dropMHz.toFixed(2)}`}
+            label="Freq Drop"
+            value={freqDropped ? `-${dropMHz}` : "0"}
             unit="MHz"
-            valueClass={`font-mono ${
-              freqDropped ? "text-amber-500 dark:text-amber-400" : "text-slate-400 dark:text-slate-500"
-            }`}
+            valueClass={freqDropped ? "text-amber-500 dark:text-amber-400" : undefined}
           />
-          <Metric label="Est. RSSI" value={rssi} unit="dBm" />
-          <Metric label="Link quality" value={quality} valueClass={qualityColor} />
+          <Metric label="Link Quality" value={quality} valueClass={qualityColor} />
         </div>
 
         {/* --- Controls --- */}
         <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 shadow-sm px-4 md:px-6 py-5">
           <div className="flex items-center justify-between mb-4">
             <h4 className="text-sm font-bold uppercase tracking-wider text-slate-400">Link Controls</h4>
-            <span className="text-xs font-mono text-slate-400">Simulated environment</span>
+            <span className="text-xs font-mono text-slate-400">
+              {isLiveMode ? "Live ESP32 telemetry" : "Simulated environment"}
+            </span>
           </div>
 
           <div className="flex flex-col md:flex-row md:items-end gap-5 md:gap-10 w-full">
@@ -248,15 +355,23 @@ export default function Home({
             {/* obstacle toggle */}
             <button
               onClick={() => setObjectPresent((v) => !v)}
+              disabled={isLiveMode && liveObjectPresent !== null}
               className={`shrink-0 text-xs uppercase tracking-wider font-extrabold px-5 py-3.5 rounded-xl border transition-all duration-200 active:scale-[0.98] ${
-                objectPresent
+                isLiveMode && liveObjectPresent !== null ? "opacity-50 cursor-not-allowed" : ""
+              } ${
+                activeObjectPresent
                   ? "bg-amber-500 border-amber-500 text-slate-950 shadow-lg shadow-amber-500/20"
                   : "bg-slate-200 border-transparent text-slate-800 hover:bg-slate-300 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
               }`}
             >
-              {objectPresent ? "Remove obstacle" : "Place obstacle"}
+              {activeObjectPresent ? "Remove obstacle" : "Place obstacle"}
             </button>
           </div>
+          {isLiveMode && liveObjectPresent !== null && (
+            <p className="mt-3 text-[11px] font-semibold text-amber-500">
+              Obstacle state is being driven by live ESP32 telemetry. Switch to Manual to override.
+            </p>
+          )}
         </div>
       </div>
     </div>

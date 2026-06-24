@@ -97,6 +97,16 @@ export default function Navbar({
           >
             Subcarrier
           </button>
+           <button
+            onClick={() => onViewChange("analysis")}
+            className={`px-3 md:px-4 py-1.5 rounded-lg text-xs md:text-sm font-semibold transition-all duration-200 ${
+              activeView === "analysis"
+                ? "bg-white dark:bg-slate-800 text-sky-600 dark:text-sky-400 shadow-sm border border-slate-250 dark:border-slate-700"
+                : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 border border-transparent"
+            }`}
+          >
+            Analysis
+          </button>
         </nav>
 
         {/* Action Controls Section */}

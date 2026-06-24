@@ -1,262 +1,315 @@
-import { useMemo } from "react";
+import { useState } from "react";
 
-export default function Analysis({ history, distance, setDistance, objectPresent, setObjectPresent }) {
-  // Compute session stats based on telemetry history
-  const stats = useMemo(() => {
-    if (!history || history.length === 0) {
-      return { min: 2.3740, max: 2.4000, avg: 2.4000, current: 2.4000 };
-    }
-    const current = history[history.length - 1];
-    const min = Math.min(...history);
-    const max = Math.max(...history);
-    const sum = history.reduce((a, b) => a + b, 0);
-    const avg = sum / history.length;
-    return { min, max, avg, current };
-  }, [history]);
+const commonReasons = [
+  {
+    reason: "Physical Obstruction",
+    description:
+      "Solid objects such as concrete walls, metal structures, furniture and human bodies absorb or reflect RF signals causing attenuation.",
+  },
+  {
+    reason: "Multipath Propagation",
+    description:
+      "Multiple reflected versions of the transmitted signal arrive at the receiver with different delays, causing destructive interference and fading.",
+  },
+  {
+    reason: "Electromagnetic Interference (EMI)",
+    description:
+      "Electrical equipment, motors, transformers and electronic devices generate unwanted electromagnetic noise affecting signal quality.",
+  },
+  {
+    reason: "Radio Frequency Interference (RFI)",
+    description:
+      "Signals from nearby wireless devices operating within similar frequency bands interfere with the intended transmission.",
+  },
+  {
+    reason: "Signal Attenuation",
+    description:
+      "Natural reduction in signal power due to propagation distance, absorption and transmission medium losses.",
+  },
+  {
+    reason: "Environmental Conditions",
+    description:
+      "Rain, humidity, fog and atmospheric disturbances can degrade certain wireless frequencies.",
+  },
+  {
+    reason: "Channel Congestion",
+    description:
+      "Multiple devices sharing the same communication channel increase collisions and packet loss.",
+  },
+  {
+    reason: "Frequency Overlap",
+    description:
+      "Overlapping frequency channels introduce interference and decrease communication reliability.",
+  },
+];
 
-  // Generate SVG path coordinate points
-  const graphPoints = useMemo(() => {
-    if (!history || history.length === 0) return "";
-    const width = 600;
-    const height = 240;
-    const padding = 25;
-    const plotWidth = width - padding * 2;
-    const plotHeight = height - padding * 2;
+const mitigationGroups = [
+  {
+    id: "broadcasting",
+    title: "A. Signal Broadcasting",
+    subtitle: "Recommended Engineering Practices",
+    accent: "from-cyan-500 to-sky-500",
+    border: "border-cyan-500/35",
+    text: "text-cyan-500 dark:text-cyan-300",
+    items: [
+      "Increase transmitter output power within regulatory limits",
+      "Optimize antenna height for improved line-of-sight",
+      "Employ high-gain directional antennas",
+      "Perform antenna impedance matching (50 ohm)",
+      "Minimize unnecessary transmission distance",
+      "Regular calibration of RF equipment",
+    ],
+  },
+  {
+    id: "fm",
+    title: "B. FM Signal Transmission",
+    subtitle: "Signal Optimization Techniques",
+    accent: "from-fuchsia-500 to-purple-500",
+    border: "border-fuchsia-500/35",
+    text: "text-fuchsia-500 dark:text-fuchsia-300",
+    items: [
+      "Select interference-free carrier frequency",
+      "Install antennas above surrounding obstacles",
+      "Use RF Band-Pass Filters",
+      "Reduce adjacent channel interference",
+      "Use high-quality coaxial transmission lines",
+    ],
+  },
+  {
+    id: "wifi",
+    title: "C. Wi-Fi Communication",
+    subtitle: "Performance Improvement Measures",
+    accent: "from-amber-500 to-orange-500",
+    border: "border-amber-500/35",
+    text: "text-amber-500 dark:text-amber-300",
+    items: [
+      "Use dual-band or tri-band access points",
+      "Position Access Point centrally",
+      "Avoid microwave ovens and cordless phones",
+      "Minimize wall and metal obstructions",
+      "Maintain firmware updates",
+      "Reduce network congestion",
+      "Install Wi-Fi Repeaters or Mesh Systems",
+      "Monitor RSSI and SNR values continuously",
+    ],
+  },
+  {
+    id: "bluetooth",
+    title: "D. Bluetooth Communication",
+    subtitle: "Reliability Enhancement Methods",
+    accent: "from-blue-500 to-indigo-500",
+    border: "border-blue-500/35",
+    text: "text-blue-500 dark:text-blue-300",
+    items: [
+      "Maintain communication within recommended range",
+      "Reduce physical obstructions",
+      "Utilize Adaptive Frequency Hopping (AFH)",
+      "Maintain direct Line-of-Sight whenever possible",
+      "Optimize antenna placement",
+    ],
+  },
+];
 
-    // Define Y scale boundaries. Let's frame around 2.36 to 2.41 GHz
-    const yMin = 2.365;
-    const yMax = 2.405;
-    const yRange = yMax - yMin;
+const technicalTerms = [
+  "RSSI",
+  "SNR",
+  "BER",
+  "PER",
+  "Path Loss",
+  "Link Budget",
+  "RF Attenuation",
+  "Multipath Fading",
+  "Fresnel Zone",
+  "EMI",
+  "RFI",
+  "VSWR",
+  "Antenna Gain",
+  "Channel Utilization",
+  "Packet Collision",
+  "Adaptive Frequency Hopping",
+  "OFDM",
+  "QoS",
+];
 
-    const points = history.map((val, index) => {
-      // X coordinate is distributed across the points buffer length
-      const x = padding + (index / (history.length - 1 || 1)) * plotWidth;
-      // Y coordinate goes down as frequency goes up (since SVG 0,0 is top-left)
-      const ratio = (val - yMin) / yRange;
-      const y = padding + plotHeight - ratio * plotHeight;
-      return { x, y };
-    });
+export default function Analysis({ distance, objectPresent }) {
+  const [openPanels, setOpenPanels] = useState({
+    broadcasting: true,
+    fm: true,
+    wifi: true,
+    bluetooth: true,
+  });
 
-    // Create SVG Path line
-    const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ");
-
-    // Create SVG Path fill (closes the shape at the bottom)
-    const fillPath = points.length > 0 
-      ? `${linePath} L ${points[points.length - 1].x.toFixed(1)} ${(height - padding).toFixed(1)} L ${points[0].x.toFixed(1)} ${(height - padding).toFixed(1)} Z`
-      : "";
-
-    return { linePath, fillPath, points };
-  }, [history]);
-
-  // Status mapping
-  const dropMHz = (2.4 - stats.current) * 1000;
-  const isObstructed = objectPresent;
+  const togglePanel = (id) => {
+    setOpenPanels((prev) => ({
+      ...prev,
+      [id]: !prev[id],
+    }));
+  };
 
   return (
-    <div className="flex-1 w-full bg-slate-950 px-4 md:px-8 py-6 flex flex-col gap-6 select-none">
-      {/* Page Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-xl md:text-2xl font-bold text-slate-100">Frequency Analysis</h2>
-          <p className="text-xs md:text-sm text-slate-400">
-            Real-time signal tracking and spectrogram analysis
-          </p>
-        </div>
+    <div className="flex-1 w-full bg-slate-50 dark:bg-slate-950 px-4 md:px-8 py-6 transition-colors">
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-5">
+        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900/60">
+          <div className="relative px-5 py-5 md:px-7 md:py-6">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.22em] text-sky-600 dark:text-sky-400">
+                  Signal Drop Analysis
+                </p>
+                <h2 className="mt-1 text-2xl font-black tracking-tight text-slate-950 dark:text-white md:text-3xl">
+                  Signal Drop Analysis & Prevention
+                </h2>
+                <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500 dark:text-slate-400">
+                  This module explains common reasons for wireless signal degradation and the engineering practices used to reduce signal loss.
+                </p>
+              </div>
 
-        {/* Real-time Status Badge */}
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 shrink-0">
-          <span className={`w-2.5 h-2.5 rounded-full ${isObstructed ? "bg-amber-400 animate-ping" : "bg-emerald-400 animate-pulse"}`} />
-          <span className="text-xs font-semibold text-slate-350">
-            Telemetry: {isObstructed ? "Obstructed Path" : "Normal Path"}
-          </span>
-        </div>
-      </div>
-
-      {/* Main Grid: Graph + Stats Column */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Graph Card */}
-        <div className="lg:col-span-2 bg-slate-900/60 border border-slate-850 rounded-2xl p-5 flex flex-col justify-between shadow-lg">
-          <div className="flex items-center justify-between mb-4">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
-              GHz Frequency Spectrogram
-            </span>
-            <span className="text-[10px] font-mono text-slate-500">
-              Showing last {history.length} samples
-            </span>
-          </div>
-
-          {/* SVG Graph View */}
-          <div className="relative w-full aspect-[2.5/1] min-h-[220px] bg-slate-950/80 rounded-xl border border-slate-800 p-2 overflow-hidden">
-            <svg
-              viewBox="0 0 600 240"
-              className="w-full h-full overflow-visible"
-              preserveAspectRatio="none"
-            >
-              <defs>
-                {/* Neon gradient path line */}
-                <linearGradient id="lineGlow" x1="0" y1="0" x2="1" y2="0">
-                  <stop offset="0%" stopColor="#38bdf8" />
-                  <stop offset="50%" stopColor="#67e8f9" />
-                  <stop offset="100%" stopColor="#34d399" />
-                </linearGradient>
-                {/* Gradient area under the line */}
-                <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.25" />
-                  <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.0" />
-                </linearGradient>
-              </defs>
-
-              {/* Grid Lines */}
-              <line x1="25" y1="25" x2="575" y2="25" stroke="#1e293b" strokeDasharray="3,3" />
-              <line x1="25" y1="78" x2="575" y2="78" stroke="#1e293b" strokeDasharray="3,3" />
-              <line x1="25" y1="131" x2="575" y2="131" stroke="#1e293b" strokeDasharray="3,3" />
-              <line x1="25" y1="184" x2="575" y2="184" stroke="#1e293b" strokeDasharray="3,3" />
-              <line x1="25" y1="215" x2="575" y2="215" stroke="#334155" />
-
-              {/* Grid values */}
-              <text x="10" y="30" fill="#475569" className="text-[9px] font-mono">2.40</text>
-              <text x="10" y="83" fill="#475569" className="text-[9px] font-mono">2.39</text>
-              <text x="10" y="136" fill="#475569" className="text-[9px] font-mono">2.38</text>
-              <text x="10" y="189" fill="#475569" className="text-[9px] font-mono">2.37</text>
-
-              {/* Paths */}
-              {graphPoints.fillPath && (
-                <path d={graphPoints.fillPath} fill="url(#areaFill)" />
-              )}
-              {graphPoints.linePath && (
-                <path
-                  d={graphPoints.linePath}
-                  fill="none"
-                  stroke="url(#lineGlow)"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              )}
-
-              {/* Pulsing indicator on the latest node point */}
-              {graphPoints.points && graphPoints.points.length > 0 && (
-                <>
-                  <circle
-                    cx={graphPoints.points[graphPoints.points.length - 1].x}
-                    cy={graphPoints.points[graphPoints.points.length - 1].y}
-                    r="6"
-                    fill={isObstructed ? "#fbbf24" : "#34d399"}
-                    className="animate-ping origin-center"
-                    style={{ transformOrigin: `${graphPoints.points[graphPoints.points.length - 1].x}px ${graphPoints.points[graphPoints.points.length - 1].y}px` }}
-                  />
-                  <circle
-                    cx={graphPoints.points[graphPoints.points.length - 1].x}
-                    cy={graphPoints.points[graphPoints.points.length - 1].y}
-                    r="4"
-                    fill={isObstructed ? "#f59e0b" : "#10b981"}
-                    stroke="#ffffff"
-                    strokeWidth="1.5"
-                  />
-                </>
-              )}
-            </svg>
-          </div>
-        </div>
-
-        {/* Real-time stats column */}
-        <div className="flex flex-col gap-4">
-          {/* Card: Current Frequency */}
-          <div className="bg-slate-900/60 border border-slate-850 rounded-2xl p-5 shadow-lg flex flex-col justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Current Frequency
-            </span>
-            <div className="mt-2.5 flex items-baseline gap-1">
-              <span className={`text-3xl font-mono font-bold tracking-tight ${isObstructed ? "text-amber-400" : "text-sky-400"}`}>
-                {stats.current.toFixed(4)}
-              </span>
-              <span className="text-sm text-slate-500">GHz</span>
-            </div>
-            <p className="text-[11px] text-slate-500 mt-2">
-              Delta Drop: <span className="font-mono text-slate-400">-{dropMHz.toFixed(2)} MHz</span>
-            </p>
-          </div>
-
-          {/* Stats Grid: Min / Max */}
-          <div className="grid grid-cols-2 gap-4">
-            {/* Max Freq */}
-            <div className="bg-slate-900/60 border border-slate-850 rounded-2xl p-4 shadow-md">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 block">
-                Session Max
-              </span>
-              <span className="text-lg font-mono font-bold text-emerald-400 mt-1 block">
-                {stats.max.toFixed(4)} <span className="text-xs font-sans text-slate-500 font-normal">GHz</span>
-              </span>
-            </div>
-
-            {/* Min Freq */}
-            <div className="bg-slate-900/60 border border-slate-850 rounded-2xl p-4 shadow-md">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 block">
-                Session Min
-              </span>
-              <span className="text-lg font-mono font-bold text-rose-400 mt-1 block">
-                {stats.min.toFixed(4)} <span className="text-xs font-sans text-slate-500 font-normal">GHz</span>
-              </span>
-            </div>
-          </div>
-
-          {/* Average */}
-          <div className="bg-slate-900/60 border border-slate-850 rounded-2xl p-4 shadow-md flex items-center justify-between">
-            <div>
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 block">
-                Session Average
-              </span>
-              <span className="text-base font-mono font-bold text-slate-200 mt-0.5 block">
-                {stats.avg.toFixed(4)} GHz
-              </span>
-            </div>
-            <div className="w-9 h-9 rounded-lg bg-slate-950 flex items-center justify-center text-slate-500">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 002 2h2a2 2 0 002-2z" />
-              </svg>
+              <div className="flex flex-wrap items-center gap-2">
+                <span
+                  className={`rounded-full px-3 py-1.5 text-xs font-bold ${
+                    objectPresent
+                      ? "bg-amber-500/10 text-amber-600 dark:text-amber-300"
+                      : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"
+                  }`}
+                >
+                  {objectPresent ? "Signal Drop Detected" : "No Signal Drop"}
+                </span>
+                {typeof distance === "number" && (
+                  <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600 dark:bg-slate-950 dark:text-slate-300">
+                    Distance: {distance.toFixed(1)} m
+                  </span>
+                )}
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-      {/* Interactive controls panel (for ease of testing graph changes directly) */}
-      <div className="bg-slate-900/40 border border-slate-850 rounded-2xl p-5 md:p-6 mt-2 max-w-4xl mx-auto w-full">
-        <h4 className="text-sm font-semibold text-slate-350 mb-4">
-          Simulator Controller
-        </h4>
-        <div className="flex flex-col md:flex-row md:items-end gap-5 md:gap-10 w-full">
-          {/* distance control */}
-          <div className="flex-1">
-            <div className="flex items-center justify-between mb-2">
-              <label htmlFor="dist-analysis" className="text-xs font-semibold text-slate-450 uppercase tracking-wider">
-                Node Distance
-              </label>
-              <span className="text-sm font-mono text-slate-300 font-semibold">{distance.toFixed(1)} m</span>
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1fr_1.25fr]">
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900/60 md:p-5">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.18em] text-sky-600 dark:text-sky-400">
+                  Section 1
+                </p>
+                <h3 className="text-base font-black text-slate-900 dark:text-slate-100">
+                  Common Reasons for Signal Drop
+                </h3>
+              </div>
+              <div className="rounded-xl bg-sky-500/10 px-3 py-1 text-xs font-bold text-sky-600 dark:text-sky-300">
+                {commonReasons.length} Reasons
+              </div>
             </div>
-            <input
-              id="dist-analysis"
-              type="range"
-              min="0.5"
-              max="30"
-              step="0.5"
-              value={distance}
-              onChange={(e) => setDistance(parseFloat(e.target.value))}
-              className="w-full accent-sky-500 bg-slate-950 h-1.5 rounded-lg appearance-none cursor-pointer"
-            />
-          </div>
 
-          {/* place object button */}
-          <button
-            onClick={() => setObjectPresent((v) => !v)}
-            className={`shrink-0 text-xs uppercase tracking-wider font-bold px-5 py-3.5 rounded-xl border transition-all duration-200 active:scale-[0.98] ${
-              objectPresent
-                ? "bg-amber-500 border-amber-500 text-slate-950 shadow-lg shadow-amber-500/20"
-                : "bg-slate-800 border-slate-800 text-slate-100 hover:bg-slate-700"
-            }`}
-          >
-            {objectPresent ? "Remove Path Obstruction" : "Simulate Path Obstruction"}
-          </button>
+            <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800">
+              <div className="grid grid-cols-[52px_1fr_1.8fr] bg-slate-100 text-[11px] font-black uppercase tracking-wider text-slate-500 dark:bg-slate-950 dark:text-slate-400">
+                <div className="border-r border-slate-200 px-3 py-3 dark:border-slate-800">No</div>
+                <div className="border-r border-slate-200 px-3 py-3 dark:border-slate-800">Reason</div>
+                <div className="px-3 py-3">Technical Description</div>
+              </div>
+
+              {commonReasons.map((item, index) => (
+                <div
+                  key={item.reason}
+                  className="grid grid-cols-[52px_1fr_1.8fr] border-t border-slate-200 text-xs text-slate-600 dark:border-slate-800 dark:text-slate-300"
+                >
+                  <div className="border-r border-slate-200 px-3 py-3 font-black text-cyan-600 dark:border-slate-800 dark:text-cyan-300">
+                    {index + 1}
+                  </div>
+                  <div className="border-r border-slate-200 px-3 py-3 font-bold text-slate-800 dark:border-slate-800 dark:text-slate-100">
+                    {item.reason}
+                  </div>
+                  <div className="px-3 py-3 leading-5">{item.description}</div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900/60 md:p-5">
+            <div className="mb-4">
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-emerald-600 dark:text-emerald-400">
+                Section 2
+              </p>
+              <h3 className="text-base font-black text-slate-900 dark:text-slate-100">
+                Precaution & Mitigation Techniques
+              </h3>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              {mitigationGroups.map((group) => {
+                const isOpen = openPanels[group.id];
+
+                return (
+                  <div
+                    key={group.id}
+                    className={`overflow-hidden rounded-2xl border ${group.border} bg-slate-50 dark:bg-slate-950/50`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => togglePanel(group.id)}
+                      className="flex w-full items-center justify-between gap-4 px-4 py-4 text-left transition hover:bg-slate-100 dark:hover:bg-slate-900"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className={`flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br ${group.accent} text-white shadow-lg`}>
+                          <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2.4" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01M4.93 12.99a10 10 0 0114.14 0M1.394 9.393a15 15 0 0121.213 0" />
+                          </svg>
+                        </div>
+                        <div>
+                          <h4 className={`text-sm font-black ${group.text}`}>{group.title}</h4>
+                          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                            {group.subtitle}
+                          </p>
+                        </div>
+                      </div>
+
+                      <svg
+                        className={`h-5 w-5 text-slate-400 transition-transform ${isOpen ? "rotate-180" : ""}`}
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.5"
+                        viewBox="0 0 24 24"
+                        xmlns="http://www.w3.org/2000/svg"
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+
+                    {isOpen && (
+                      <div className="border-t border-slate-200 px-4 py-4 dark:border-slate-800">
+                        <ul className="space-y-2.5">
+                          {group.items.map((item) => (
+                            <li key={item} className="flex gap-2 text-xs leading-5 text-slate-600 dark:text-slate-300">
+                              <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-[10px] font-black text-emerald-600 dark:text-emerald-300">
+                                ✓
+                              </span>
+                              <span>{item}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
         </div>
+
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900/60 md:p-5">
+          <h3 className="text-sm font-black uppercase tracking-[0.18em] text-slate-700 dark:text-slate-200">
+            Advanced Technical Terms
+          </h3>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {technicalTerms.map((term) => (
+              <span
+                key={term}
+                className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400"
+              >
+                {term}
+              </span>
+            ))}
+          </div>
+        </section>
       </div>
     </div>
   );

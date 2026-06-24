@@ -14,6 +14,9 @@ export default function Rsi({
   const [connectionStatus, setConnectionStatus] = useState("connecting");
   const [latestPusherData, setLatestPusherData] = useState(null);
 
+  // Full-detail buffer kept for the PDF report (graph uses liveHistory @ 40 pts).
+  const [reportBuffer, setReportBuffer] = useState([]);
+
   useEffect(() => {
     Pusher.logToConsole = true;
 
@@ -40,18 +43,18 @@ export default function Rsi({
       setConnectionStatus("error");
     });
 
-    const channel = pusher.subscribe("wifi-sensing-channel");
+    const channel = pusher.subscribe("csi-telemetry");
 
     channel.bind("pusher:subscription_succeeded", () => {
-      console.log("Subscribed to wifi-sensing-channel");
+      console.log("Subscribed to csi-telemetry");
     });
 
     channel.bind("pusher:subscription_error", (error) => {
       console.error("Pusher subscription error:", error);
     });
 
-    channel.bind("csi-update", (data) => {
-      console.log("Pusher csi-update data:", data);
+    channel.bind("live-batch", (data) => {
+      console.log("Pusher live-batch data:", data);
 
       setLatestPusherData(data);
 
@@ -60,57 +63,81 @@ export default function Rsi({
         ? packet.samples
         : [packet];
 
-      const nextItems = samples
-        .filter((sample) => sample?.rssi !== undefined && sample?.rssi !== null)
-        .map((sample) => {
-          const timeObj = sample?.timestamp
-            ? new Date(sample.timestamp)
-            : packet?.timestamp
-              ? new Date(packet.timestamp)
-              : data?.timestamp
-                ? new Date(data.timestamp)
-                : new Date();
+      const validSamples = samples.filter(
+        (sample) => sample?.rssi !== undefined && sample?.rssi !== null,
+      );
 
-          const timeString = timeObj.toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-          });
+      const buildTime = (sample) => {
+        const timeObj = sample?.timestamp
+          ? new Date(sample.timestamp)
+          : packet?.timestamp
+            ? new Date(packet.timestamp)
+            : data?.timestamp
+              ? new Date(data.timestamp)
+              : new Date();
 
-          return {
-            rssi: Number(sample.rssi),
-            time: timeString,
-          };
+        return timeObj.toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
         });
+      };
+
+      // Points for the graph (rssi + time only)
+      const nextItems = validSamples.map((sample) => ({
+        rssi: Number(sample.rssi),
+        time: buildTime(sample),
+      }));
+
+      // Full-detail rows for the report
+      const nextReportRows = validSamples.map((sample) => {
+        const motion = sample?.motion || {};
+        return {
+          time: buildTime(sample),
+          pkt: sample.packet_num ?? sample.pkt ?? sample.packet ?? "-",
+          rssi: Number(sample.rssi),
+          agc: sample.agc ?? "-",
+          motionState: motion.motion_state || sample.motion_state || "IDLE",
+          motionScore:
+            motion.motion_score ?? sample.motion_score ?? sample.mae ?? 0,
+        };
+      });
 
       if (nextItems.length > 0) {
         setLiveHistory((prev) => {
           const next = [...prev, ...nextItems];
           return next.length > 40 ? next.slice(next.length - 40) : next;
         });
+
+        setReportBuffer((prev) => {
+          const next = [...prev, ...nextReportRows];
+          return next.length > 1000 ? next.slice(next.length - 1000) : next;
+        });
       }
     });
 
     return () => {
       channel.unbind_all();
-      pusher.unsubscribe("wifi-sensing-channel");
+      pusher.unsubscribe("csi-telemetry");
       pusher.disconnect();
     };
   }, []);
 
   const defaultData = useMemo(() => {
-    const timeString = new Date().toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
-
-    return [
-      {
+    // Seed several zero points (not just one) so the SVG line renders a
+    // visible flat baseline + X-axis ticks before live data arrives.
+    const now = Date.now();
+    return Array.from({ length: 12 }, (_, i) => {
+      const t = new Date(now - (11 - i) * 1000);
+      return {
         rssi: 0,
-        time: timeString,
-      },
-    ];
+        time: t.toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        }),
+      };
+    });
   }, []);
 
   const displayData =
@@ -119,6 +146,97 @@ export default function Rsi({
       : history && history.length > 0
         ? history
         : defaultData;
+
+  const getMotionStateType = (state) => {
+    const normalized = String(state || "").toUpperCase();
+    if (normalized.includes("MOTION")) return "motion";
+    if (normalized.includes("STATIC") || normalized.includes("OBSTACLE"))
+      return "obstacle";
+    return "idle";
+  };
+
+  const formatMotionState = (state) => String(state || "IDLE").replace(/_/g, " ");
+
+  // --- REPORT GENERATOR (Native Browser Print PDF) ---
+  const generatePDFReport = () => {
+    const rows = reportBuffer.length > 0 ? reportBuffer : displayData.map((d) => ({
+      time: d.time,
+      pkt: "-",
+      rssi: Number(d.rssi),
+      agc: "-",
+      motionState: "IDLE",
+      motionScore: 0,
+    }));
+
+    const rssiValues = rows
+      .map((r) => Number(r.rssi))
+      .filter((v) => Number.isFinite(v));
+    const avgRssi = rssiValues.length
+      ? (rssiValues.reduce((a, b) => a + b, 0) / rssiValues.length).toFixed(1)
+      : "N/A";
+    const minRssi = rssiValues.length ? Math.min(...rssiValues) : "N/A";
+    const maxRssi = rssiValues.length ? Math.max(...rssiValues) : "N/A";
+    const latestRssi = rssiValues.length ? rssiValues[rssiValues.length - 1] : "N/A";
+
+    const printWindow = window.open("", "_blank");
+    const html = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Wi-Fi RSSI Telemetry Report</title>
+          <style>
+            body { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; padding: 30px; color: #0f172a; font-size: 12px; }
+            .header { border-bottom: 2px solid #1e293b; padding-bottom: 12px; margin-bottom: 20px; }
+            .header h1 { margin: 0 0 5px 0; font-size: 20px; }
+            .meta-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 25px; background: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; }
+            .meta-box font { font-size: 10px; color: #64748b; text-transform: uppercase; display: block; font-weight: bold; }
+            .meta-box val { font-size: 16px; font-weight: bold; }
+            table { width: 100%; border-collapse: collapse; text-align: left; margin-top: 10px; }
+            th, td { border-bottom: 1px solid #e2e8f0; padding: 8px 4px; font-size: 11px; }
+            th { background-color: #f1f5f9; font-weight: bold; color: #475569; }
+            .idle { color: #059669; font-weight: 600; }
+            .motion { color: #dc2626; font-weight: 800; }
+            .obstacle { color: #7c3aed; font-weight: 700; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h1>Wi-Fi RSSI Telemetry Report</h1>
+            <span style="color: #64748b;">Received Signal Strength Indicator log &bull; ${new Date().toLocaleString()}</span>
+          </div>
+          <div class="meta-grid">
+            <div class="meta-box"><font>Samples Retained</font><val>${rows.length} pkts</val></div>
+            <div class="meta-box"><font>Latest RSSI</font><val>${latestRssi} dBm</val></div>
+            <div class="meta-box"><font>Avg / Min / Max</font><val>${avgRssi} / ${minRssi} / ${maxRssi}</val></div>
+            <div class="meta-box"><font>Transceiver Distance</font><val>${Number(distance).toFixed(1)} m</val></div>
+          </div>
+          <h3>RSSI Audit Log (Latest 250 captures)</h3>
+          <table>
+            <thead>
+              <tr><th>Timestamp</th><th>Packet #</th><th>RSSI</th><th>LNA Gain</th><th>Motion Score</th><th>Classification</th></tr>
+            </thead>
+            <tbody>
+              ${rows.slice(-250).reverse().map((r) => `
+                <tr>
+                  <td>${r.time}</td>
+                  <td>#${r.pkt}</td>
+                  <td>${r.rssi} dBm</td>
+                  <td>${r.agc} dB</td>
+                  <td>${Number(r.motionScore).toFixed(1)}</td>
+                  <td class="${getMotionStateType(r.motionState)}">${formatMotionState(r.motionState)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+          <script>
+            setTimeout(() => { window.print(); }, 500);
+          </script>
+        </body>
+      </html>
+    `;
+    printWindow.document.write(html);
+    printWindow.document.close();
+  };
 
   const graphData = useMemo(() => {
     const width = 800;
@@ -253,7 +371,7 @@ export default function Rsi({
           </p>
         </div>
 
-        <div className="flex items-center gap-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-1 rounded-xl shadow-sm">
+        <div className="flex flex-wrap items-center gap-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-1 rounded-xl shadow-sm">
           <button
             type="button"
             onClick={() => setIsLiveMode(true)}
@@ -283,6 +401,14 @@ export default function Rsi({
             }`}
           >
             MANUAL SIMULATOR
+          </button>
+
+          <button
+            type="button"
+            onClick={generatePDFReport}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-rose-600 text-white shadow-md hover:bg-rose-500 transition-all active:scale-95 ml-1"
+          >
+            📄 GENERATE PDF REPORT
           </button>
         </div>
       </div>
@@ -434,14 +560,14 @@ export default function Rsi({
             Latest Pusher Data
           </h4>
           <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-            Check browser console also
+            {reportBuffer.length} samples cached &bull; check console too
           </span>
         </div>
 
         <pre className="max-h-64 overflow-auto rounded-xl bg-slate-950 text-emerald-300 p-4 text-xs leading-relaxed">
           {latestPusherData
             ? JSON.stringify(latestPusherData, null, 2)
-            : "Waiting for Pusher csi-update event..."}
+            : "Waiting for Pusher live-batch event..."}
         </pre>
       </div>
 

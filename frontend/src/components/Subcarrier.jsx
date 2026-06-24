@@ -20,6 +20,9 @@ export default function Subcarrier({
   // --- INTERACTIVE STRAND HIGHLIGHTER ---
   const [highlightedStrand, setHighlightedStrand] = useState(null);
 
+  // --- FULL-DETAIL BUFFER FOR THE PDF REPORT ---
+  const [reportBuffer, setReportBuffer] = useState([]);
+
   // 1. Capture live Vercel/Pusher WebSocket packages
   useEffect(() => {
     const pusher = new Pusher("37eddc60d27348eb95f7", {
@@ -31,49 +34,120 @@ export default function Subcarrier({
       setConnectionStatus(states.current);
     });
 
-    const channel = pusher.subscribe("wifi-sensing-channel");
+    // Robust helpers: accept any CSI length / format.
+    const normalizeCsi = (value) => {
+      if (Array.isArray(value)) {
+        return value.map(Number).filter((n) => Number.isFinite(n));
+      }
+      if (typeof value === "string") {
+        try {
+          const parsed = JSON.parse(value);
+          if (Array.isArray(parsed)) return parsed.map(Number).filter((n) => Number.isFinite(n));
+        } catch {
+          return value.split(",").map((v) => Number(v.trim())).filter((n) => Number.isFinite(n));
+        }
+      }
+      return [];
+    };
 
-    channel.bind("csi-update", (data) => {
+    const computeMagnitudes = (raw) => {
+      if (!raw || raw.length === 0) return [];
+      if (raw.length % 2 === 0) {
+        const mags = [];
+        for (let i = 0; i < raw.length; i += 2) {
+          const rI = raw[i];
+          const iQ = raw[i + 1];
+          mags.push(Math.sqrt(rI * rI + iQ * iQ));
+        }
+        return mags;
+      }
+      return raw.slice();
+    };
+
+    const resampleTo = (arr, size) => {
+      if (arr.length === size) return arr;
+      if (arr.length === 0) return Array.from({ length: size }, () => 0);
+      if (arr.length === 1) return Array.from({ length: size }, () => arr[0]);
+      const out = new Array(size);
+      for (let i = 0; i < size; i++) {
+        const idx = (i / (size - 1)) * (arr.length - 1);
+        const lo = Math.floor(idx);
+        const hi = Math.ceil(idx);
+        const frac = idx - lo;
+        out[i] = arr[lo] * (1 - frac) + arr[hi] * frac;
+      }
+      return out;
+    };
+
+    const channel = pusher.subscribe("csi-telemetry");
+
+    channel.bind("live-batch", (data) => {
       if (!isLiveMode) return;
 
-      const payload = data?.payload;
+      const payload = data?.payload || data?.data || data;
       if (!payload) return;
 
       const samples = payload.samples || [payload];
       const newestSample = samples[samples.length - 1];
+      if (!newestSample) return;
 
-      if (newestSample && newestSample.csi && newestSample.csi.length === 128) {
-        const rawIQ = newestSample.csi;
-        const calculatedMagnitudes = [];
+      const rawIQ = normalizeCsi(
+        newestSample.csi ||
+          newestSample.csi_data ||
+          newestSample.raw_csi ||
+          newestSample.amplitudes,
+      );
+      if (rawIQ.length === 0) return;
 
-        // Convert raw I/Q baseband integers into Euclidean Magnitudes
-        for (let i = 0; i < rawIQ.length; i += 2) {
-          const rI = rawIQ[i];
-          const iQ = rawIQ[i + 1];
-          calculatedMagnitudes.push(Math.sqrt(rI * rI + iQ * iQ));
-        }
+      // I/Q -> magnitudes, normalize to 64 bins, then take 30 active center bins
+      const mags = computeMagnitudes(rawIQ);
+      const mags64 = mags.length === 64 ? mags : resampleTo(mags, 64);
+      const activeSubcarriers = mags64.slice(16, 46);
 
-        // Slice out 30 active data subcarriers near the center (skipping noisy guard bands and DC null)
-        const activeSubcarriers = calculatedMagnitudes.slice(16, 46);
+      const timeObj = newestSample.timestamp
+        ? new Date(newestSample.timestamp)
+        : payload.timestamp
+          ? new Date(payload.timestamp)
+          : data.timestamp
+            ? new Date(data.timestamp)
+            : new Date();
+      const timeString = timeObj.toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
 
-        const timeObj = data.timestamp ? new Date(data.timestamp) : new Date();
-        const timeString = timeObj.toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-        });
+      setLiveHistory((prev) => {
+        const next = [...prev, { time: timeString, amplitudes: activeSubcarriers }];
+        return next.length > 40 ? next.slice(next.length - 40) : next;
+      });
 
-        setLiveHistory((prev) => {
-          // Maintain a rolling buffer of the last 40 time ticks
-          const next = [...prev, { time: timeString, amplitudes: activeSubcarriers }];
-          return next.length > 40 ? next.slice(next.length - 40) : next;
-        });
-      }
+      // Full-detail row for the report
+      const motion = newestSample.motion || {};
+      const ampNums = activeSubcarriers.filter((n) => Number.isFinite(n));
+      const avgAmp = ampNums.length ? ampNums.reduce((a, b) => a + b, 0) / ampNums.length : 0;
+      const minAmp = ampNums.length ? Math.min(...ampNums) : 0;
+      const maxAmp = ampNums.length ? Math.max(...ampNums) : 0;
+
+      setReportBuffer((prev) => {
+        const row = {
+          time: timeString,
+          pkt: newestSample.packet_num ?? newestSample.pkt ?? "-",
+          rssi: newestSample.rssi ?? "-",
+          motionState: motion.motion_state || newestSample.motion_state || "IDLE",
+          motionScore: motion.motion_score ?? newestSample.motion_score ?? 0,
+          avgAmp,
+          minAmp,
+          maxAmp,
+        };
+        const next = [...prev, row];
+        return next.length > 1000 ? next.slice(next.length - 1000) : next;
+      });
     });
 
     return () => {
       channel.unbind_all();
-      channel.unsubscribe();
+      pusher.unsubscribe("csi-telemetry");
       pusher.disconnect();
     };
   }, [isLiveMode]);
@@ -110,18 +184,20 @@ export default function Subcarrier({
   }, [isLiveMode, objectPresent]);
 
   const defaultHistory = useMemo(() => {
-    const timeString = new Date().toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
-
-    return [
-      {
-        time: timeString,
+    // Seed several zero points (not just one) so the SVG line actually
+    // renders a visible flat baseline + X-axis ticks before live data arrives.
+    const now = Date.now();
+    return Array.from({ length: 12 }, (_, i) => {
+      const t = new Date(now - (11 - i) * 1000);
+      return {
+        time: t.toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        }),
         amplitudes: Array.from({ length: 30 }, () => 0),
-      },
-    ];
+      };
+    });
   }, []);
 
   // Reconcile active history array
@@ -247,6 +323,97 @@ export default function Subcarrier({
     return ticks;
   }, [activeHistory, paddingLeft, plotWidth]);
 
+  const getMotionStateType = (state) => {
+    const normalized = String(state || "").toUpperCase();
+    if (normalized.includes("MOTION")) return "motion";
+    if (normalized.includes("STATIC") || normalized.includes("OBSTACLE")) return "obstacle";
+    return "idle";
+  };
+
+  const formatMotionState = (state) => String(state || "IDLE").replace(/_/g, " ");
+
+  // --- REPORT GENERATOR (Native Browser Print PDF) ---
+  const generatePDFReport = () => {
+    const rows =
+      reportBuffer.length > 0
+        ? reportBuffer
+        : activeHistory.map((h) => {
+            const amps = (h.amplitudes || []).filter((n) => Number.isFinite(n));
+            const avg = amps.length ? amps.reduce((a, b) => a + b, 0) / amps.length : 0;
+            return {
+              time: h.time,
+              pkt: "-",
+              rssi: "-",
+              motionState: "IDLE",
+              motionScore: 0,
+              avgAmp: avg,
+              minAmp: amps.length ? Math.min(...amps) : 0,
+              maxAmp: amps.length ? Math.max(...amps) : 0,
+            };
+          });
+
+    const printWindow = window.open("", "_blank");
+    const html = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Wi-Fi CSI Subcarrier Report</title>
+          <style>
+            body { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; padding: 30px; color: #0f172a; font-size: 12px; }
+            .header { border-bottom: 2px solid #1e293b; padding-bottom: 12px; margin-bottom: 20px; }
+            .header h1 { margin: 0 0 5px 0; font-size: 20px; }
+            .meta-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 25px; background: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; }
+            .meta-box font { font-size: 10px; color: #64748b; text-transform: uppercase; display: block; font-weight: bold; }
+            .meta-box val { font-size: 16px; font-weight: bold; }
+            table { width: 100%; border-collapse: collapse; text-align: left; margin-top: 10px; }
+            th, td { border-bottom: 1px solid #e2e8f0; padding: 8px 4px; font-size: 11px; }
+            th { background-color: #f1f5f9; font-weight: bold; color: #475569; }
+            .idle { color: #059669; font-weight: 600; }
+            .motion { color: #dc2626; font-weight: 800; }
+            .obstacle { color: #7c3aed; font-weight: 700; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h1>Wi-Fi CSI Subcarrier Report</h1>
+            <span style="color: #64748b;">30 active OFDM subcarrier amplitudes &bull; ${new Date().toLocaleString()}</span>
+          </div>
+          <div class="meta-grid">
+            <div class="meta-box"><font>Ticks Retained</font><val>${rows.length}</val></div>
+            <div class="meta-box"><font>Session Start</font><val>${rows[0]?.time || "N/A"}</val></div>
+            <div class="meta-box"><font>Active Bins</font><val>30 (idx 16-45)</val></div>
+            <div class="meta-box"><font>Transceiver Distance</font><val>${Number(distance).toFixed(1)} m</val></div>
+          </div>
+          <h3>Subcarrier Amplitude Audit Log (Latest 250 ticks)</h3>
+          <table>
+            <thead>
+              <tr><th>Timestamp</th><th>Packet #</th><th>RSSI</th><th>Avg Mag</th><th>Min Mag</th><th>Max Mag</th><th>Motion Score</th><th>Classification</th></tr>
+            </thead>
+            <tbody>
+              ${rows.slice(-250).reverse().map((r) => `
+                <tr>
+                  <td>${r.time}</td>
+                  <td>#${r.pkt}</td>
+                  <td>${r.rssi} dBm</td>
+                  <td>${Number(r.avgAmp).toFixed(1)}</td>
+                  <td>${Number(r.minAmp).toFixed(1)}</td>
+                  <td>${Number(r.maxAmp).toFixed(1)}</td>
+                  <td>${Number(r.motionScore).toFixed(1)}</td>
+                  <td class="${getMotionStateType(r.motionState)}">${formatMotionState(r.motionState)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+          <script>
+            setTimeout(() => { window.print(); }, 500);
+          </script>
+        </body>
+      </html>
+    `;
+    printWindow.document.write(html);
+    printWindow.document.close();
+  };
+
   // Theme Colors
   const chartBg = isDarkMode ? "#020617" : "#f8fafc";
   const gridColor = isDarkMode ? "#1e293b" : "#e2e8f0";
@@ -265,7 +432,7 @@ export default function Subcarrier({
         </div>
 
         {/* Source Switcher */}
-        <div className="flex items-center gap-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-850 p-1 rounded-xl shadow-sm">
+        <div className="flex flex-wrap items-center gap-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-850 p-1 rounded-xl shadow-sm">
           <button
             onClick={() => setIsLiveMode(true)}
             className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
@@ -290,6 +457,13 @@ export default function Subcarrier({
             }`}
           >
             MANUAL SIMULATOR
+          </button>
+
+          <button
+            onClick={generatePDFReport}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-rose-600 text-white shadow-md hover:bg-rose-500 transition-all active:scale-95 ml-1"
+          >
+            📄 GENERATE PDF REPORT
           </button>
         </div>
       </div>
